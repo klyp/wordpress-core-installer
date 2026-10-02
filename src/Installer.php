@@ -2,7 +2,6 @@
 
 namespace Klyp\WordPressCoreInstaller;
 
-use Composer\Config;
 use Composer\Installer\LibraryInstaller;
 use Composer\Package\PackageInterface;
 use Composer\Repository\InstalledRepositoryInterface;
@@ -25,7 +24,8 @@ use Composer\Repository\InstalledRepositoryInterface;
  * directory that would take other files with it (the project root, anything
  * outside the project, the vendor directory or a directory containing it)
  * is rejected, as are URLs and stream wrappers ("file://...") and two
- * packages whose directories overlap.
+ * packages whose directories overlap. A directory that already holds files
+ * other than WordPress core is refused too, because Composer would empty it.
  */
 class Installer extends LibraryInstaller
 {
@@ -57,6 +57,7 @@ class Installer extends LibraryInstaller
     {
         $this->claim($repo, $package);
         $this->waitForRemovals($this->getInstallPath($package));
+        $this->assertReplaceable($package);
 
         return parent::install($repo, $package);
     }
@@ -64,6 +65,7 @@ class Installer extends LibraryInstaller
     public function update(InstalledRepositoryInterface $repo, PackageInterface $initial, PackageInterface $target)
     {
         $this->claim($repo, $target);
+        $this->assertReplaceable($target);
 
         return parent::update($repo, $initial, $target);
     }
@@ -78,6 +80,33 @@ class Installer extends LibraryInstaller
         $this->leaving[$package->getName()] = array($path, $promise);
 
         return $promise;
+    }
+
+    /**
+     * Composer empties the install directory before extracting core into it.
+     * That's fine for a previous WordPress install, but a non-empty directory
+     * without WordPress in it (say "public" instead of "public/wp") holds
+     * someone's own files, which would be deleted without a word.
+     */
+    private function assertReplaceable(PackageInterface $package)
+    {
+        $path = $this->getInstallPath($package);
+        if (!is_dir($path) || is_file($path . '/wp-includes/version.php')) {
+            return;
+        }
+
+        $entries = scandir($path);
+        if ($entries === false || count(array_diff($entries, array('.', '..'))) === 0) {
+            return;
+        }
+
+        throw new \InvalidArgumentException(sprintf(
+            '"%s" already contains files that are not WordPress core, and installing %s would delete them. '
+            . 'Move them out, or point extra.%s at a new or empty directory.',
+            $path,
+            $package->getPrettyName(),
+            self::EXTRA_KEY
+        ));
     }
 
     /**
@@ -191,7 +220,7 @@ class Installer extends LibraryInstaller
     private function assertSafeDir($dir, PackageInterface $package)
     {
         $path = $this->normalize($dir);
-        $vendor = $this->normalize((string) $this->composer->getConfig()->get('vendor-dir', Config::RELATIVE_PATHS));
+        $vendor = $this->vendorDir();
         $segments = explode('/', $path);
 
         if (preg_match('#^([a-zA-Z]:)?/#', str_replace('\\', '/', $dir))) {
@@ -201,11 +230,11 @@ class Installer extends LibraryInstaller
             $reason = 'URLs, stream wrappers and drive letters are not allowed';
         } elseif ($path === '') {
             $reason = 'it is the project root';
-        } elseif (in_array('..', $segments, true)) {
+        } elseif ($this->hasParentSegment($segments)) {
             $reason = 'it points outside the project';
-        } elseif (strcasecmp($path, $vendor) === 0) {
+        } elseif ($vendor !== null && strcasecmp($path, $vendor) === 0) {
             $reason = 'it is the vendor directory';
-        } elseif (stripos($vendor . '/', $path . '/') === 0) {
+        } elseif ($vendor !== null && stripos($vendor . '/', $path . '/') === 0) {
             $reason = 'it contains the vendor directory';
         } else {
             return;
@@ -218,6 +247,69 @@ class Installer extends LibraryInstaller
             $reason,
             self::EXTRA_KEY
         ));
+    }
+
+    /**
+     * ".." goes up a level, and so do "..." or ".. " on Windows, which drops
+     * trailing dots and spaces from each path segment.
+     *
+     * @param string[] $segments
+     * @return bool
+     */
+    private function hasParentSegment(array $segments)
+    {
+        foreach ($segments as $segment) {
+            if (trim($segment, '. ') === '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The vendor directory relative to the project root, or null when it's
+     * outside the project. Compared as real paths, so an absolute or
+     * symlinked vendor-dir can't slip past the checks.
+     *
+     * @return string|null
+     */
+    private function vendorDir()
+    {
+        $root = $this->realPath(getcwd());
+        $vendor = $this->realPath((string) $this->composer->getConfig()->get('vendor-dir'));
+
+        if (stripos($vendor . '/', $root . '/') !== 0) {
+            return null;
+        }
+
+        return (string) substr($vendor, strlen($root) + 1);
+    }
+
+    /**
+     * realpath() for paths that may not exist yet: resolve the deepest
+     * existing parent and append the rest.
+     *
+     * @param string $path
+     * @return string
+     */
+    private function realPath($path)
+    {
+        $path = rtrim(str_replace('\\', '/', $path), '/');
+        $rest = array();
+        while ($path !== '' && ($real = realpath($path)) === false) {
+            array_unshift($rest, basename($path));
+            $parent = dirname($path);
+            if ($parent === $path) {
+                break;
+            }
+            $path = $parent;
+        }
+        if (isset($real) && $real !== false) {
+            $path = $real;
+        }
+
+        return rtrim(str_replace('\\', '/', $path), '/') . ($rest ? '/' . implode('/', $rest) : '');
     }
 
     /**

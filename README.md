@@ -39,19 +39,22 @@ Only the root project decides the directory. Settings in a dependency's own `com
 
 ### Safety checks
 
-Composer deletes the install directory whenever WordPress is updated or removed. To make sure that can never take other files with it, the plugin refuses to install, with a clear error, when the directory is:
+Composer empties the install directory whenever WordPress is installed, updated or removed. To make sure that can never take other files with it, the plugin refuses to install, with a clear error, when the directory is:
 
 - the project root (`.`, `./`)
-- outside the project (`../wp`, `wp/../..`)
+- outside the project (`../wp`, `wp/../..`, and on Windows `...` or `.. `)
 - an absolute path (`/var/www/wp`, `C:\wp`)
 - a URL, stream wrapper or drive-relative path (`file:///var/www/wp`, `phar://…`, `C:wp`)
-- the vendor directory, or a directory that contains it (e.g. `lib` when `vendor-dir` is `lib/vendor`)
+- the vendor directory, or a directory that contains it (e.g. `lib` when `vendor-dir` is `lib/vendor`), including when `vendor-dir` is set as an absolute path
 - empty
 - the same as, inside, or containing another `wordpress-core` package's directory
+- an existing directory that already has files in it but no WordPress install (no `wp-includes/version.php`), e.g. `public` instead of `public/wp`. An empty directory, or one that already holds WordPress, is fine.
 
 Replacing one `wordpress-core` package with another in the same directory (for example, switching a project to `klyp/wordpress`) is fine. The old package is removed before the new one is installed.
 
-Use a dedicated subdirectory such as `wp`. Keep your own code (themes, plugins, `wp-config.php`) outside it, because it's replaced on every core update.
+Use a dedicated subdirectory such as `wp`. Keep your own code (themes, plugins, uploads, `wp-config.php`) outside it, because it's replaced on every core update.
+
+If you change `wordpress-install-dir` on an existing project, delete the old directory yourself. Composer only knows the new one, so the old core files stay on disk, and they stay reachable over the web if they're under the web root.
 
 ### Switching from another WordPress core installer
 

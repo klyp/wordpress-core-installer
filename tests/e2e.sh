@@ -17,17 +17,19 @@ ok() { echo "  ok   - $1"; pass=$((pass + 1)); }
 not_ok() { echo "  FAIL - $1"; fail=$((fail + 1)); }
 
 # Fixture core packages (path repositories, mirrored rather than symlinked).
-make_core() {
-	local name="$1" dir="$WORK/fixtures/${1//\//-}"
-	mkdir -p "$dir"
+make_core() { # <name> [version]
+	local name="$1" version="${2:-1.0.0}" dir="$WORK/fixtures/${1//\//-}-${2:-1.0.0}"
+	mkdir -p "$dir/wp-includes"
 	echo '<?php // fixture' >"$dir/wp-load.php"
+	echo "<?php \$wp_version = '$version';" >"$dir/wp-includes/version.php"
 	echo "$name" >"$dir/NAME"
-	jq -n --arg name "$name" '{name: $name, version: "1.0.0", type: "wordpress-core",
+	jq -n --arg name "$name" --arg version "$version" '{name: $name, version: $version, type: "wordpress-core",
 		require: {"klyp/wordpress-core-installer": "*"}}' >"$dir/composer.json"
 	echo "$dir"
 }
 CORE_A="$(make_core test/core-a)"
 CORE_B="$(make_core test/core-b)"
+CORE_A2="$(make_core test/core-a 1.0.1)"
 
 # new_project <name> <require json> [extra json]
 new_project() {
@@ -35,14 +37,15 @@ new_project() {
 	[[ -n "$extra" ]] || extra='{}'
 	mkdir -p "$dir"
 	jq -n \
-		--arg installer "$REPO_ROOT" --arg a "$CORE_A" --arg b "$CORE_B" \
+		--arg installer "$REPO_ROOT" --arg a "$CORE_A" --arg b "$CORE_B" --arg a2 "$CORE_A2" \
 		--argjson require "$2" --argjson extra "$extra" \
 		'{
 			name: "test/project",
 			repositories: [
 				{type: "path", url: $installer, options: {symlink: false}},
-				{type: "path", url: $a, options: {symlink: false}},
-				{type: "path", url: $b, options: {symlink: false}}
+				{type: "path", url: $a, canonical: false, options: {symlink: false}},
+				{type: "path", url: $b, options: {symlink: false}},
+				{type: "path", url: $a2, canonical: false, options: {symlink: false}}
 			],
 			require: $require,
 			"minimum-stability": "dev",
@@ -120,6 +123,43 @@ expect_refused '"lib" with vendor-dir lib/vendor (contains the vendor directory)
 
 p="$(new_project empty '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": ""}')"
 expect_refused '"" (empty)' "$p" 'must be a non-empty directory name'
+
+for dir in '...' '.. /wp' 'wp/. ./x'; do
+	p="$(new_project "dots-$pass-$fail" '{"test/core-a": "1.0.0"}' "$(jq -n --arg d "$dir" '{"wordpress-install-dir": $d}')")"
+	expect_refused "\"$dir\" (Windows parent dir)" "$p" 'outside the project'
+done
+
+for dir in vendor lib; do
+	p="$(new_project "abs-vendor-$dir" '{"test/core-a": "1.0.0"}' "$(jq -n --arg d "$dir" '{"wordpress-install-dir": $d}')")"
+	jq --arg v "$p/$([[ $dir == lib ]] && echo lib/vendor || echo vendor)" '.config["vendor-dir"] = $v' "$p/composer.json" >"$p/c.json" && mv "$p/c.json" "$p/composer.json"
+	expect_refused "\"$dir\" with an absolute vendor-dir" "$p" 'vendor directory'
+done
+
+echo "Existing directories"
+p="$(new_project existing-files '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "public"}')"
+mkdir -p "$p/public/app/uploads" && echo keep >"$p/public/app/uploads/photo.jpg"
+expect_refused 'non-empty dir without WordPress is refused' "$p" 'already contains files that are not WordPress core'
+if [[ -f "$p/public/app/uploads/photo.jpg" ]]; then ok '... and its files are left alone'; else not_ok '... and its files are left alone'; fi
+
+p="$(new_project existing-empty '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "wp"}')"
+mkdir -p "$p/wp"
+expect_installed 'existing empty dir is used' "$p" wp
+
+p="$(new_project existing-wp '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "wp"}')"
+mkdir -p "$p/wp/wp-includes" && echo '<?php $wp_version = "0.9";' >"$p/wp/wp-includes/version.php"
+expect_installed 'existing WordPress install is replaced' "$p" wp
+
+p="$(new_project moved-dir '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "wp"}')"
+mkdir -p "$p/public" && echo keep >"$p/public/index.php"
+if composer_in "$p" install \
+	&& jq '.extra["wordpress-install-dir"] = "public" | .require["test/core-a"] = "1.0.1"' "$p/composer.json" >"$p/c.json" && mv "$p/c.json" "$p/composer.json" \
+	&& ! composer_in "$p" update && grep -qF 'already contains files that are not WordPress core' "$WORK/out.log" \
+	&& [[ -f "$p/public/index.php" ]]; then
+	ok 'updating into a non-empty dir without WordPress is refused'
+else
+	not_ok 'updating into a non-empty dir without WordPress is refused'
+	cat "$WORK/out.log"
+fi
 
 echo "Shared directories"
 both='{"test/core-a": "1.0.0", "test/core-b": "1.0.0"}'
