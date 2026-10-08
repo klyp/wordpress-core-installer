@@ -48,7 +48,7 @@ Composer empties the install directory whenever WordPress is installed, updated 
 - the vendor directory, or a directory that contains it (e.g. `lib` when `vendor-dir` is `lib/vendor`), including when `vendor-dir` is set as an absolute path
 - empty
 - the same as, inside, or containing another `wordpress-core` package's directory
-- an existing directory that already has files in it but no WordPress install (no `wp-includes/version.php`), e.g. `public` instead of `public/wp`. An empty directory, or one that already holds WordPress, is fine.
+- an existing directory that already has files in it but no WordPress install, e.g. `public` instead of `public/wp`. An empty directory, or one that already holds WordPress, is fine. That includes a damaged install that's missing files, recognised by `wp-load.php` and `wp-settings.php`.
 
 Replacing one `wordpress-core` package with another in the same directory (for example, switching a project to `klyp/wordpress`) is fine. The old package is removed before the new one is installed.
 

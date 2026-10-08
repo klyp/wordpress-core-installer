@@ -138,7 +138,7 @@ done
 echo "Existing directories"
 p="$(new_project existing-files '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "public"}')"
 mkdir -p "$p/public/app/uploads" && echo keep >"$p/public/app/uploads/photo.jpg"
-expect_refused 'non-empty dir without WordPress is refused' "$p" 'already contains files that are not WordPress core'
+expect_refused 'non-empty dir without WordPress is refused' "$p" 'already contains files but no WordPress install'
 if [[ -f "$p/public/app/uploads/photo.jpg" ]]; then ok '... and its files are left alone'; else not_ok '... and its files are left alone'; fi
 
 p="$(new_project existing-empty '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "wp"}')"
@@ -149,11 +149,19 @@ p="$(new_project existing-wp '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir
 mkdir -p "$p/wp/wp-includes" && echo '<?php $wp_version = "0.9";' >"$p/wp/wp-includes/version.php"
 expect_installed 'existing WordPress install is replaced' "$p" wp
 
+p="$(new_project damaged-wp '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "wp"}')"
+mkdir -p "$p/wp/wp-admin" && echo '<?php' >"$p/wp/wp-load.php" && echo '<?php' >"$p/wp/wp-settings.php"
+expect_installed 'damaged WordPress install (no wp-includes) is replaced' "$p" wp
+
+p="$(new_project wp-load-only '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "public"}')"
+mkdir -p "$p/public" && echo '<?php' >"$p/public/wp-load.php" && echo keep >"$p/public/index.php"
+expect_refused 'a stray wp-load.php alone is not taken for WordPress' "$p" 'already contains files but no WordPress install'
+
 p="$(new_project moved-dir '{"test/core-a": "1.0.0"}' '{"wordpress-install-dir": "wp"}')"
 mkdir -p "$p/public" && echo keep >"$p/public/index.php"
 if composer_in "$p" install \
 	&& jq '.extra["wordpress-install-dir"] = "public" | .require["test/core-a"] = "1.0.1"' "$p/composer.json" >"$p/c.json" && mv "$p/c.json" "$p/composer.json" \
-	&& ! composer_in "$p" update && grep -qF 'already contains files that are not WordPress core' "$WORK/out.log" \
+	&& ! composer_in "$p" update && grep -qF 'already contains files but no WordPress install' "$WORK/out.log" \
 	&& [[ -f "$p/public/index.php" ]]; then
 	ok 'updating into a non-empty dir without WordPress is refused'
 else

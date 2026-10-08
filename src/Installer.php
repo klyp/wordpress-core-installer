@@ -84,14 +84,15 @@ class Installer extends LibraryInstaller
 
     /**
      * Composer empties the install directory before extracting core into it.
-     * That's fine for a previous WordPress install, but a non-empty directory
-     * without WordPress in it (say "public" instead of "public/wp") holds
-     * someone's own files, which would be deleted without a word.
+     * That's fine for a previous WordPress install, including a damaged one
+     * that's missing files, but a non-empty directory without WordPress in it
+     * (say "public" instead of "public/wp") holds someone's own files, which
+     * would be deleted without a word.
      */
     private function assertReplaceable(PackageInterface $package)
     {
         $path = $this->getInstallPath($package);
-        if (!is_dir($path) || is_file($path . '/wp-includes/version.php')) {
+        if (!is_dir($path) || $this->isWordPressDir($path)) {
             return;
         }
 
@@ -101,12 +102,26 @@ class Installer extends LibraryInstaller
         }
 
         throw new \InvalidArgumentException(sprintf(
-            '"%s" already contains files that are not WordPress core, and installing %s would delete them. '
+            '"%s" already contains files but no WordPress install, and installing %s would delete them. '
             . 'Move them out, or point extra.%s at a new or empty directory.',
             $path,
             $package->getPrettyName(),
             self::EXTRA_KEY
         ));
+    }
+
+    /**
+     * Whether a directory holds a WordPress install. wp-includes/version.php
+     * marks a complete one; wp-load.php and wp-settings.php side by side mark
+     * one that is damaged or partly installed, which should be replaced too.
+     *
+     * @param string $path
+     * @return bool
+     */
+    private function isWordPressDir($path)
+    {
+        return is_file($path . '/wp-includes/version.php')
+            || (is_file($path . '/wp-load.php') && is_file($path . '/wp-settings.php'));
     }
 
     /**
